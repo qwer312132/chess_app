@@ -1,0 +1,29 @@
+# 套件依賴
+node_modules/
+
+# 打包輸出目錄 (Vite 用 dist，CRA 用 build)
+dist/
+dist-ssr/
+build/
+
+# 環境變數與機密金鑰 (避免 API Key 曝光)
+.env
+.env.local
+.env.*.local
+
+# 記錄檔 (Logs)
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# 快取與暫存檔
+.eslintcache
+*.tsbuildinfo
+
+# 編輯器與作業系統自動產生的檔案
+.DS_Store
+*.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
