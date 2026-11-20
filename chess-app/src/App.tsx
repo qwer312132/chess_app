@@ -3,6 +3,12 @@ import { Chess, Square } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 
 type Arrow = [Square, Square, string];
+interface EngineLine {
+  score: number | string; // 數字分數（如 0.25）或將殺字串（如 "M3"）
+  move_san: string | null;
+  from: string | null;
+  to: string | null;
+}
 
 function App() {
   const [game, setGame] = useState(new Chess());
@@ -10,6 +16,49 @@ function App() {
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
   const [currentMoveIndex, setCurrentMoveIndex] = useState(-1);
   const [currentStats, setCurrentStats] = useState<Record<string, { wins: number, total: number, winRate: number }>>({});
+  const [engineLines, setEngineLines] = useState<EngineLine[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showEngine, setShowEngine] = useState(true); // 可隨時開關引擎
+
+  // 監聽 currentFen 呼叫本地 Stockfish 引擎
+  useEffect(() => {
+    const currentFen = game.fen();
+    if (!showEngine) {
+      setEngineLines([]);
+      setIsAnalyzing(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsAnalyzing(true);
+
+    // 延遲 300ms 再發請求，避免快速連按上/下一步時重複啟動多個引擎
+    const timer = setTimeout(() => {
+      fetch(
+        `http://127.0.0.1:8000/api/engine?fen=${encodeURIComponent(currentFen)}&depth=15&multipv=3`,
+        { signal: controller.signal }
+      )
+        .then(res => res.json())
+        .then(data => {
+          if (data.analysis) {
+            setEngineLines(data.analysis);
+          }
+          setIsAnalyzing(false);
+        })
+        .catch(err => {
+          if (err.name !== 'AbortError') {
+            console.error("獲取 Stockfish 分析失敗:", err);
+            setIsAnalyzing(false);
+          }
+        });
+    }, 300);
+
+    // 切換到下一個盤面時，取消還沒跑完的舊請求
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [game.fen(), showEngine]);
   useEffect(() => {
     const currentFen = game.fen();
     
@@ -162,6 +211,34 @@ function App() {
   
   // 跳到最新步數
   const goToEnd = () => setCurrentMoveIndex(game.history().length - 1);
+
+  // 將引擎分數換算成白方評分條的高度百分比 (0% ~ 100%)
+  const getWhiteBarPercent = (score: number | string | undefined): number => {
+    if (score === undefined) return 50;
+    if (typeof score === 'string') {
+      // "M3" 代表白方必殺 (100%)，"M-3" 代表黑方必殺 (0%)
+      return score.startsWith('M-') ? 0 : 100;
+    }
+    // 將分數限制在 -10 到 +10 之間，線性對應到 5% ~ 95%
+    const clamped = Math.max(-10, Math.min(10, score));
+    return 50 + (clamped / 10) * 45;
+  };
+
+  const formatScore = (score: number | string | undefined): string => {
+    if (score === undefined) return '0.00';
+    if (typeof score === 'string') return score;
+    return score > 0 ? `+${score.toFixed(2)}` : score.toFixed(2);
+  };
+
+  // 取出引擎第一推薦走法，畫成藍色箭頭與原本的歷史勝率箭頭合併
+  const topLine = engineLines[0];
+  const engineArrow: Arrow[] =
+    showEngine && topLine?.from && topLine?.to
+      ? [[topLine.from as Square, topLine.to as Square, 'rgba(30, 144, 255, 0.85)']]
+      : [];
+
+  const combinedArrows: Arrow[] = [...arrows, ...engineArrow];
+  const whitePercent = getWhiteBarPercent(topLine?.score);
   return (
     <div style={{ width: '500px', margin: '50px auto', textAlign: 'center', fontFamily: 'sans-serif' }}>
       <h2>我的西洋棋資料庫</h2>
@@ -173,7 +250,56 @@ function App() {
       >
         切換為 {orientation === 'white' ? '黑方' : '白方'} 視角
       </button>
-
+      <button
+          onClick={() => setShowEngine(prev => !prev)}
+          style={{
+            padding: '8px 16px',
+            cursor: 'pointer',
+            backgroundColor: showEngine ? '#1e90ff' : '#ddd',
+            color: showEngine ? '#fff' : '#333',
+            border: 'none',
+            borderRadius: '4px',
+          }}
+        >
+          Stockfish：{showEngine ? '開啟' : '關閉'}
+        </button>
+      <div
+        style={{
+          width: '28px',
+          height: '500px',
+          backgroundColor: '#333',
+          border: '1px solid #999',
+          display: 'flex',
+          flexDirection: orientation === 'white' ? 'column-reverse' : 'column',
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: `${whitePercent}%`,
+            backgroundColor: '#f0f0f0',
+            transition: 'height 0.3s ease',
+          }}
+        />
+        <span
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            fontSize: '10px',
+            fontWeight: 'bold',
+            color: '#ff6b00',
+            backgroundColor: 'rgba(255,255,255,0.85)',
+            padding: '1px 2px',
+            borderRadius: '2px',
+          }}
+        >
+          {formatScore(topLine?.score)}
+        </span>
+      </div>
+        
       <Chessboard 
         position={displayFen()} 
         onPieceDrop={onDrop}
@@ -251,6 +377,40 @@ function App() {
                     </span>
                 );
             })}
+        </div>
+        {/* 新增：Stockfish 引擎分析面板 */}
+        <div style={{ marginBottom: '15px', padding: '10px', border: '1px solid #1e90ff', backgroundColor: '#f5faff' }}>
+          <h4 style={{ margin: '0 0 8px 0', display: 'flex', justifyContent: 'space-between' }}>
+            <span>Stockfish 分析 (深度 15)</span>
+            {isAnalyzing && <span style={{ fontSize: '12px', color: '#888' }}>計算中...</span>}
+          </h4>
+          {!showEngine ? (
+            <div style={{ fontSize: '13px', color: '#666' }}>引擎已關閉</div>
+          ) : engineLines.length === 0 ? (
+            <div style={{ fontSize: '13px', color: '#666' }}>等待分析結果...</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px' }}>
+              {engineLines.map((line, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    padding: '4px 6px',
+                    backgroundColor: idx === 0 ? '#e0f0ff' : 'transparent',
+                    borderRadius: '4px',
+                  }}
+                >
+                  <span>
+                    <strong>#{idx + 1}</strong> {line.move_san ?? '-'}
+                  </span>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>
+                    {formatScore(line.score)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

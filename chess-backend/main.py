@@ -5,6 +5,8 @@ import io
 import sqlite3
 import uuid
 from fastapi.middleware.cors import CORSMiddleware
+import chess
+import chess.engine
 def init_db():
     conn = sqlite3.connect('chess_database.db')
     cursor = conn.cursor()
@@ -171,3 +173,38 @@ def get_analysis(fen: str, player_color: str = "white"): # 預設抓白方
     stats = cursor.fetchall()
     conn.close()
     return {"stats": stats}
+
+STOCKFISH_PATH = "./stockfish.exe"
+
+@app.get("/api/engine")
+def analyze_position(fen: str, depth: int = 15, multipv: int = 3):
+    try:
+        board = chess.Board(fen)
+    except ValueError:
+        return {"error": "無效的 FEN 格式"}
+
+    # 使用 with 確保每次分析完自動關閉引擎，釋放 CPU 資源
+    with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
+        infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
+        
+        results = []
+        for info in infos:
+            # 統一轉換為白方視角（正數白優、負數黑優）
+            score = info["score"].white()
+            if score.is_mate():
+                eval_val = f"M{score.mate()}"
+            else:
+                cp = score.score()
+                eval_val = round(cp / 100, 2) if cp is not None else 0.0
+                
+            pv = info.get("pv", [])
+            best_move = pv[0] if pv else None
+            
+            results.append({
+                "score": eval_val,
+                "move_san": board.san(best_move) if best_move else None,
+                "from": chess.square_name(best_move.from_square) if best_move else None,
+                "to": chess.square_name(best_move.to_square) if best_move else None,
+            })
+            
+    return {"analysis": results}

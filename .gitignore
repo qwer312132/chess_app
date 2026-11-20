@@ -27,3 +27,8 @@ pnpm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+*.exe
+
+__pycache__/
+*.py[cod]
